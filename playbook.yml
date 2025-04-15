@@ -1,0 +1,47 @@
+- name: Lubuntu
+  hosts: localhost
+  vars_prompt:
+    - name: gists_key
+      prompt: What is the Github gists key? (Leave empty to skip)
+      private: no
+  tasks:
+  - name: Update and upgrade apt packages
+    become: true
+    apt:
+      update_cache: yes
+      upgrade: dist
+  - name: Install curl and NFS client tools
+    become: true
+    apt:
+      name:
+        - curl
+        - nfs-common
+      state: present
+      update_cache: yes
+  - name: Create SSH key
+    when: gists_key != ""
+    shell: |
+      yes y | ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
+      cd $(mktemp -d)
+      wget https://gist.githubusercontent.com/felixkroemer/c628ea1015e56f7d2f42f0c92c67ec92/raw/keys
+      new_entry=$(cat ~/.ssh/id_ed25519.pub)
+      new_user=$(echo "$new_entry" | awk '{print $NF}')
+      if grep -q "$new_user" keys; then
+        sed -i "/$new_user/c\\$new_entry" keys
+      else
+        echo "$new_entry" >> keys
+      fi
+      JSON_PAYLOAD=$(jq -n --arg content "$(cat keys)" '{ "files": { "keys": { "content": $content } } }')
+      curl -X PATCH \
+        -H "Authorization: token {{ gists_key }}" \
+        -H "Content-Type: application/json" \
+        -d "$JSON_PAYLOAD" \
+        "https://api.github.com/gists/c628ea1015e56f7d2f42f0c92c67ec92"
+  - name: Mount nfs
+    become: yes
+    ansible.posix.mount:
+      src: 192.168.0.202:/data
+      path: /home/fekr/data
+      opts: rw,sync,hard
+      state: mounted
+      fstype: nfs
