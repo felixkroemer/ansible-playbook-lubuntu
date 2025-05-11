@@ -1,23 +1,59 @@
-- name: Lubuntu
+- name: Ubuntu
   hosts: localhost
   vars_prompt:
     - name: gists_key
       prompt: What is the Github gists key? (Leave empty to skip)
       private: no
+  vars:
+    apt_packages:
+      - curl
+      - nfs-common
+      - nautilus-dropbox
+      - anki
+      - rofi
+    snap_packages:
+      - firefox
+      - code
+    configs:
+      - { src: "rofi/config.rasi", dest: "~/.config/rofi/config.rasi" }
+      - { src: "kde_shortcuts/terminal.desktop", dest: "~/.local/share/applications/"}
+      - { src: "kde_shortcuts/rofi.desktop", dest: "~/.local/share/applications/"}
+    shortcuts:
+      - { name: "terminal.desktop", key: "Alt+Return"}
+      - { name: "rofi.desktop", key: "Meta+d"}
   tasks:
   - name: Update and upgrade apt packages
     become: true
     apt:
       update_cache: yes
       upgrade: dist
-  - name: Install curl and NFS client tools
+  - name: Install apt packages
     become: true
     apt:
-      name:
-        - curl
-        - nfs-common
+      name: "{{ item }}"
       state: present
       update_cache: yes
+    loop: "{{ apt_packages }}"
+  - name: Install snap packages
+    become: true
+    community.general.snap:
+      name: "{{ item }}"
+      state: present
+    loop: "{{ snap_packages }}"
+  - name: Ensure destination directories exist
+    file:
+      path: "{{ item.dest | dirname }}"
+      state: directory
+      mode: '0755'
+    loop: "{{ configs }}"
+  - name: Download configs
+    get_url:
+      url: "https://raw.githubusercontent.com/felixkroemer/dotfiles/main/{{ item.src }}"
+      dest: "{{ item.dest }}"
+    loop: "{{ configs }}"
+  - name: Enable Shortcuts
+    shell: kwriteconfig5 --file kglobalshortcutsrc --group {{ item.name }} --key '_launch' '{{ item.key }},none,none'
+    loop: "{{ shortcuts }}"
   - name: Create SSH key
     when: gists_key != ""
     shell: |
