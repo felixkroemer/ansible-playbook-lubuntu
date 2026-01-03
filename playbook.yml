@@ -11,6 +11,7 @@
       - nautilus-dropbox
       - anki
       - rofi
+      - avahi-daemon
     snap_packages:
       - firefox
       - code
@@ -76,7 +77,7 @@
   - name: Mount nfs
     become: yes
     ansible.posix.mount:
-      src: 192.168.0.202:/data
+      src: oslo.local:/data
       path: /home/fekr/data
       opts: rw,sync,hard
       state: mounted
