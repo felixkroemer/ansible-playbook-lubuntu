@@ -28,6 +28,7 @@
     apt:
       update_cache: yes
       upgrade: dist
+
   - name: Install apt packages
     become: true
     apt:
@@ -35,50 +36,88 @@
       state: present
       update_cache: yes
     loop: "{{ apt_packages }}"
+
   - name: Install snap packages
     become: true
     community.general.snap:
       name: "{{ item }}"
       state: present
     loop: "{{ snap_packages }}"
+
   - name: Ensure destination directories exist
     file:
       path: "{{ item.dest | dirname }}"
       state: directory
       mode: '0755'
     loop: "{{ configs }}"
+
   - name: Download configs
     get_url:
       url: "https://raw.githubusercontent.com/felixkroemer/dotfiles/main/{{ item.src }}"
       dest: "{{ item.dest }}"
     loop: "{{ configs }}"
+
   - name: Enable Shortcuts
     shell: kwriteconfig5 --file kglobalshortcutsrc --group {{ item.name }} --key '_launch' '{{ item.key }},none,none'
     loop: "{{ shortcuts }}"
+
+  - name: Configure KDE wallpaper to use Bing Picture of the Day
+    shell: |
+      qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript '
+        desktops().forEach(d => {
+          d.wallpaperPlugin = "org.kde.potd";
+          d.currentConfigGroup = ["Wallpaper", "org.kde.potd", "General"];
+          d.writeConfig("Provider", "bing");
+          d.reloadConfig();
+        });
+      '
+
   - name: Create SSH key
     when: gists_key != ""
+    command: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
+    args:
+      creates: ~/.ssh/id_ed25519
+
+  - name: Fetch gist keys
+    when: gists_key != ""
+    uri:
+      url: https://gist.githubusercontent.com/felixkroemer/c628ea1015e56f7d2f42f0c92c67ec92/raw/keys
+      return_content: yes
+    register: gist_keys
+
+  - name: Update keys content
+    when: gists_key != ""
     shell: |
-      yes y | ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
-      cd $(mktemp -d)
-      wget https://gist.githubusercontent.com/felixkroemer/c628ea1015e56f7d2f42f0c92c67ec92/raw/keys
       new_entry=$(cat ~/.ssh/id_ed25519.pub)
       new_user=$(echo "$new_entry" | awk '{print $NF}')
-      if grep -q "$new_user" keys; then
-        sed -i "/$new_user/c\\$new_entry" keys
+      existing="{{ gist_keys.content }}"
+      if echo "$existing" | grep -q "$new_user"; then
+        echo "$existing" | sed "/$new_user/c\\$new_entry"
       else
-        echo "$new_entry" >> keys
+        printf '%s\n' "$existing" "$new_entry"
       fi
-      JSON_PAYLOAD=$(jq -n --arg content "$(cat keys)" '{ "files": { "keys": { "content": $content } } }')
-      curl -X PATCH \
-        -H "Authorization: token {{ gists_key }}" \
-        -H "Content-Type: application/json" \
-        -d "$JSON_PAYLOAD" \
-        "https://api.github.com/gists/c628ea1015e56f7d2f42f0c92c67ec92"
+    register: updated_keys
+
+  - name: Upload updated keys to gist
+    when: gists_key != ""
+    uri:
+      url: https://api.github.com/gists/c628ea1015e56f7d2f42f0c92c67ec92
+      method: PATCH
+      headers:
+        Authorization: "token {{ gists_key }}"
+        Content-Type: "application/json"
+      body_format: json
+      body:
+        files:
+          keys:
+            content: "{{ updated_keys.stdout }}"
+      status_code: 200
+
   - name: Mount nfs
     become: yes
     ansible.posix.mount:
       src: oslo.local:/data
       path: /home/fekr/data
-      opts: rw,sync,hard
+      opts: rw,soft,timeo=30,retrans=3,noatime
       state: mounted
       fstype: nfs
