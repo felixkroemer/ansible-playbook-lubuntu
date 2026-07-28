@@ -1,0 +1,161 @@
+- name: Point rofi config to KDE-generated theme
+  lineinfile:
+    path: ~/.config/rofi/config.rasi
+    regexp: '^@theme'
+    line: '@theme "~/.config/rofi/kde-colors.rasi"'
+
+- name: Install kde-rofi-colors script
+  become: true
+  copy:
+    dest: /usr/local/bin/kde-rofi-colors
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      # Reads KDE color scheme from ~/.config/kdeglobals and writes
+      # ~/.config/rofi/kde-colors.rasi so rofi follows KDE's palette.
+      set -euo pipefail
+
+      KDEGLOBALS="${HOME}/.config/kdeglobals"
+      ROFI_COLORS="${HOME}/.config/rofi/kde-colors.rasi"
+
+      if [[ ! -f "$KDEGLOBALS" ]]; then
+          echo "kde-rofi-colors: $KDEGLOBALS not found, skipping" >&2
+          exit 0
+      fi
+
+      # Return the value of a key inside a named section.
+      get_color() {
+          local section="$1" key="$2"
+          awk -F'=' -v sec="$section" -v k="$key" '
+              /^\[/ { found = ($0 == "[" sec "]") }
+              found && $1 == k { print $2; exit }
+          ' "$KDEGLOBALS"
+      }
+
+      # Convert "r,g,b" to rofi's rgba(r, g, b, a) syntax.
+      to_rgba() {
+          local rgb="$1"
+          IFS=',' read -r r g b <<< "$rgb"
+          printf "rgba(%d, %d, %d, 1.0)" "$r" "$g" "$b"
+      }
+
+      win_bg=$(get_color "Colors:Window"    "BackgroundNormal")
+      win_fg=$(get_color "Colors:Window"    "ForegroundNormal")
+      sel_bg=$(get_color "Colors:Selection" "BackgroundNormal")
+      sel_fg=$(get_color "Colors:Selection" "ForegroundNormal")
+      view_bg=$(get_color "Colors:View"     "BackgroundNormal")
+      border=$(get_color  "Colors:Window"   "DecorationFocus")
+
+      mkdir -p "$(dirname "$ROFI_COLORS")"
+
+      cat > "$ROFI_COLORS" << RASI
+      /* Auto-generated from KDE color scheme — do not edit manually */
+      * {
+          background-color: $(to_rgba "$win_bg");
+          text-color:       $(to_rgba "$win_fg");
+          border-color:     $(to_rgba "$border");
+      }
+
+      window {
+          background-color: $(to_rgba "$win_bg");
+          border:           1px solid;
+          border-radius:    6px;
+          padding:          4px;
+      }
+
+      mainbox {
+          background-color: transparent;
+          border:           0px;
+          padding:          0px;
+      }
+
+      inputbar {
+          background-color: $(to_rgba "$view_bg");
+          text-color:       $(to_rgba "$win_fg");
+          padding:          8px;
+          border:           0px 0px 1px 0px;
+          border-color:     $(to_rgba "$border");
+      }
+
+      prompt {
+          background-color: transparent;
+          text-color:       $(to_rgba "$win_fg");
+          padding:          0px 8px 0px 0px;
+      }
+
+      entry {
+          background-color: transparent;
+          text-color:       $(to_rgba "$win_fg");
+      }
+
+      listview {
+          background-color: transparent;
+          border:           0px;
+          scrollbar:        false;
+          padding:          4px 0px;
+      }
+
+      element {
+          background-color: transparent;
+          text-color:       $(to_rgba "$win_fg");
+          padding:          4px 8px;
+          border-radius:    4px;
+      }
+
+      element selected {
+          background-color: $(to_rgba "$sel_bg");
+          text-color:       $(to_rgba "$sel_fg");
+      }
+
+      element-icon {
+          background-color: transparent;
+          size:             1.2em;
+      }
+
+      element-text {
+          background-color: transparent;
+          text-color:       inherit;
+      }
+      RASI
+
+- name: Ensure systemd user directory exists
+  file:
+    path: ~/.config/systemd/user
+    state: directory
+    mode: '0755'
+
+- name: Install kde-rofi-colors systemd path unit
+  copy:
+    dest: ~/.config/systemd/user/kde-rofi-colors.path
+    content: |
+      [Unit]
+      Description=Watch KDE global config for color changes
+
+      [Path]
+      PathModified=%h/.config/kdeglobals
+
+      [Install]
+      WantedBy=default.target
+
+- name: Install kde-rofi-colors systemd service unit
+  copy:
+    dest: ~/.config/systemd/user/kde-rofi-colors.service
+    content: |
+      [Unit]
+      Description=Sync KDE color scheme to rofi theme
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/kde-rofi-colors
+
+- name: Enable and start kde-rofi-colors path unit
+  systemd:
+    name: kde-rofi-colors.path
+    scope: user
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Generate initial rofi KDE colors
+  command: /usr/local/bin/kde-rofi-colors
+  failed_when: false
